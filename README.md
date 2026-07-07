@@ -73,7 +73,8 @@ The startup script will:
 ```
 jupyter-fugue-iceberg/
 ├── src/                          # DAG files (mounted as /opt/airflow/dags)
-│   └── Insert_Customer_Order_Data_To_Iceberg.py
+│   ├── Insert_Customer_Order_Data_To_Iceberg.py
+│   └── Insert_Benchmark_Data_To_Iceberg.py
 ├── spark/
 │   └── apps/                     # PySpark scripts
 │       ├── generate_sample_data.py
@@ -81,8 +82,10 @@ jupyter-fugue-iceberg/
 ├── jupyter/
 │   └── Dockerfile                # Custom Jupyter image with Fugue + PyIceberg
 ├── notebooks/
-│   ├── sample_datafusion_iceberg.ipynb  # DataFusion queries on Iceberg tables
-│   └── sample_fugue_iceberg.ipynb       # Fugue multi-backend demo (Pandas/DuckDB/Spark/Dask/Ray)
+│   ├── sample_fugue_iceberg.ipynb       # Fugue multi-backend demo (Pandas/DuckDB/Spark/Dask/Ray)
+│   ├── sample_datafusion_iceberg.ipynb  # Legacy DataFusion notebook
+│   ├── benchmark_fugue_backends.ipynb   # Benchmark: Fugue-based SELECT * across 5 engines
+│   └── benchmark_native_backends.ipynb  # Benchmark: Native API SELECT * across 5 engines (no Fugue)
 ├── docker-compose.yaml           # Full stack definition
 ├── Dockerfile                    # Custom Airflow image with Java + Python deps
 ├── start.sh                      # Startup script with graceful shutdown
@@ -92,21 +95,17 @@ jupyter-fugue-iceberg/
 
 ## How to run the demo
 1. Access http://localhost:8080 via a browser. Enable the `Insert_Customer_Order_Data_To_Iceberg` DAG and run it. This seeds 5 e-commerce tables into Iceberg.
-2. Access http://localhost:8888 via a browser.
+2. (Optional) Enable the `Insert_Benchmark_Data_To_Iceberg` DAG and run it. This seeds 4 benchmark dimension tables.
+3. Access http://localhost:8888 via a browser.
    - Open `sample_fugue_iceberg.ipynb` — queries 5 tables across 5 different execution backends
+   - Open `benchmark_fugue_backends.ipynb` — benchmarks SELECT * via Fugue across all 5 engines
+   - Open `benchmark_native_backends.ipynb` — benchmarks SELECT * via native APIs (no Fugue) for comparison
 
-## DAG
+## DAGs
 ### Insert_Customer_Order_Data_To_Iceberg
 Seeds 5 e-commerce tables into Iceberg using PySpark with referential integrity.
 
-**Pipeline:**
-```
-create_namespace -> seed_all_tables
-```
-
-Seeds all 5 tables in a single SparkSession (avoids JVM gateway restart issues with multiple PySpark tasks).
-
-**Tables seeded:**
+**Pipeline:** `create_namespace -> seed_all_tables`
 
 | Table | Rows | Description |
 |-------|------|-------------|
@@ -116,13 +115,25 @@ Seeds all 5 tables in a single SparkSession (avoids JVM gateway restart issues w
 | `ecommerce.clickstream` | 1M | User browsing events with sessions |
 | `ecommerce.recommendations` | 50K | Precomputed product recommendations with scores |
 
-## Notebook
+### Insert_Benchmark_Data_To_Iceberg
+Seeds 4 benchmark dimension tables into Iceberg for engine performance comparison.
+
+**Pipeline:** `create_namespace -> seed_all_tables`
+
+| Table | Columns | Rows | Description |
+|-------|---------|------|-------------|
+| `benchmark.small_dim_100k` | 10 | 100K | Small dimension, medium row count |
+| `benchmark.large_dim_100k` | 50 | 100K | Large dimension, medium row count |
+| `benchmark.small_dim_200k` | 10 | 200K | Small dimension, large row count |
+| `benchmark.large_dim_200k` | 50 | 200K | Large dimension, large row count |
+
+Each table has 10 fixed columns (id, category, region, status, priority, created_date, amount, score, flag, description) plus additional columns cycling through int, float, string, date, and decimal types. Written in 50K-row batches to avoid OOM.
+
+## Notebooks
 
 ### Fugue — Multi-Backend Demo (`sample_fugue_iceberg.ipynb`)
 
 Demonstrates Fugue's backend portability: write SQL once, run on any engine.
-
-**What it covers:**
 
 | Table | Backend | Query |
 |-------|---------|-------|
@@ -134,7 +145,17 @@ Demonstrates Fugue's backend portability: write SQL once, run on any engine.
 
 Also includes: backend portability comparison (same query on 3 engines), Python+SQL hybrid transforms, and visualizations.
 
-> **Note:** Run `Insert_Customer_Order_Data_To_Iceberg` DAG first to populate all tables.
+> **Prerequisite:** Run `Insert_Customer_Order_Data_To_Iceberg` DAG first.
+
+### Benchmark — Fugue Backends (`benchmark_fugue_backends.ipynb`)
+
+Benchmarks `SELECT *` query time across Fugue backends on the 4 benchmark dimension tables. Produces a consolidated timing table, grouped bar chart, and fastest-engine-per-table summary. Configurable `INCLUDE_DASK` and `INCLUDE_RAY` flags (both default `False`) to skip memory-heavy engines. Ray has a 3-retry limit with "Insufficient memory error" fallback.
+
+### Benchmark — Native Backends (`benchmark_native_backends.ipynb`)
+
+Same benchmark as above but using each engine's **native API** (no Fugue): Pandas `df.copy()`, DuckDB `duckdb.sql()`, Spark `spark.sql()`, Dask `dd.from_pandas().compute()`, Ray `ray.put()/ray.get()`. Same `INCLUDE_DASK`/`INCLUDE_RAY` config flags. Compare with the Fugue notebook to measure Fugue's abstraction overhead.
+
+> **Prerequisite:** Run `Insert_Benchmark_Data_To_Iceberg` DAG first for both benchmark notebooks.
 
 ## Tech Stack
 
